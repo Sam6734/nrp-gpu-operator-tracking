@@ -1,0 +1,19 @@
+---
+apiVersion: bitnami.com/v1alpha1
+kind: SealedSecret
+metadata:
+  annotations:
+    sealedsecrets.bitnami.com/namespace-wide: "true"
+  creationTimestamp: null
+  name: netbox-token
+  namespace: operators
+spec:
+  encryptedData:
+    NB_TOKEN: AgAJRSzWfXaRPqqfGMPDfpDLiKP2RgEAbKXNntjbSb7w7i2WSuvdGsktzkIlRLddsauYGYYggMzt7/TM+w96oJKzFs9ECw7DUQ/azR/v4ePXYzak34OdARBquiDVbK4BobsfDqbnd1GXA0rAUFy9i1Gzblinm8qKbjxHL1vKFZf7ULNrqw+5fEvbOdaGbX6zxxhcUCh0npt5nZGo2pTDQmtz9yIqNb/ituzdM5K0OLr1tEq26Kjp2aEC9X/dqHqk4/Va/aQ2ZFsvAIWiqggxPsvPi6QpVC8U0NE8Ce0GMwZCe8Fqf+G/DQy6U/CK2rQbT1OsH8KETE03bkNjBKJf+HZdauZK5aVXnOLGZrn5D2geAJMIh2Td06/e84THJqT+mQCX+jxbuF6lveT7gKvdzXnfN9chy2NP0XfoFq2hRuUf+fOhFyaDQzPL1wVhwigNKZ3xq/bM59fDIXPFMqJTOVux0QpGgUA0+TwuNMsPyVo1jKTsdINbiqGdmooi+6psz9kFQTGG1fv/WWgENYke7/QgUDZp+jQ73xeJ6gnDsvr64FHB8m4INcMCp51h6ohCt2X0suKyF5i7Nsw3U2Ig3GUM5Rn1BmBdjpUBYvahyP/+y9hnWfgCoKHE4g8fjQrsYHQfMW3S061ZfeBJ7GOrBrjG3pauttv4uw/G9tPGnFA2o/rAw/X/RWqlNYbSuMb6IJrrykRKWpAXPnkwnh4zv5Ss9yd3W11/itPV4oXVM5F3mNn8TrP92ln+
+  template:
+    metadata:
+      annotations:
+        sealedsecrets.bitnami.com/namespace-wide: "true"
+      creationTimestamp: null
+      name: netbox-token
+      namespace: operators

@@ -1,0 +1,135 @@
+# Secret is managed as a SealedSecret in postgres-secret-sealed.yaml
+# ── ConfigMap: init SQL ───────────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-initdb
+  namespace: operators
+data:
+  01-schema.sql: |
+    CREATE TABLE IF NOT EXISTS reboot_events (
+        id                SERIAL PRIMARY KEY,
+        node_name         TEXT        NOT NULL,
+        boot_id           TEXT,
+        gpu_model         TEXT,
+        reboot_count_24h  INTEGER     DEFAULT 0,
+        power_pct_applied INTEGER,
+        created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_reboot_node ON reboot_events(node_name);
+    CREATE INDEX IF NOT EXISTS idx_reboot_ts   ON reboot_events(created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS power_limit_events (
+        id                    SERIAL PRIMARY KEY,
+        node_name             TEXT        NOT NULL,
+        gpu_index             INTEGER,
+        gpu_model             TEXT,
+        old_power_limit_watts INTEGER,
+        new_power_limit_watts INTEGER,
+        target_pct            INTEGER,
+        status                TEXT        DEFAULT 'pending',
+        applied_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_pl_node ON power_limit_events(node_name);
+    CREATE INDEX IF NOT EXISTS idx_pl_ts   ON power_limit_events(applied_at DESC);
+---
+# ── PersistentVolumeClaim ─────────────────────────────────────────────────────
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+  namespace: operators
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi
+  # storageClassName: ""   # uncomment and set if your cluster needs a specific class
+---
+# ── StatefulSet ───────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgresql
+  namespace: operators
+  labels:
+    app: postgresql
+spec:
+  serviceName: postgresql
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgresql
+  template:
+    metadata:
+      labels:
+        app: postgresql
+    spec:
+      securityContext:
+        fsGroup: 999
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5432
+              name: postgres
+          env:
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: gputrack-postgres-secret
+                  key: POSTGRES_DB
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: gputrack-postgres-secret
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: gputrack-postgres-secret
+                  key: POSTGRES_PASSWORD
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: initdb
+              mountPath: /docker-entrypoint-initdb.d
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "gputrack", "-d", "gputrack"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: postgres-data
+        - name: initdb
+          configMap:
+            name: postgres-initdb
+---
+# ── Service ───────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgresql
+  namespace: operators
+  labels:
+    app: postgresql
+spec:
+  selector:
+    app: postgresql
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+  clusterIP: None   # headless – StatefulSet DNS: postgresql.operators.svc

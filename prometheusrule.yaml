@@ -1,0 +1,28 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: snr-netbox-watcher-alerts
+  namespace: monitoring
+  labels:
+    app: snr-netbox-watcher
+spec:
+  groups:
+    - name: snr-netbox-watcher.rules
+      rules:
+        - alert: SNRWatcherRebootStorm24h
+          expr: sum by (node) (increase(snr_events_total{action="reboot_confirmed"}[24h])) > 3
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "(node={{ $labels.node }}) has been rebooted {{ $value }} times by SNR in the last 24h"
+            description: "More than 3 reboot confirmations in the last 24h for node={{ $labels.node }}. Value={{ $value }}"
+
+        - alert: SNRWatcherStuckDeletesStorm24h
+          expr: sum by (node) (increase(snr_watcher_stuck_deletes_total[24h])) > 3
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "SNR Has failed to reboot (node={{ $labels.node }} after {{ $value }} attempts )"
+            description: "More than 3 stuck SNR CR deletions in the last 24h for node={{ $labels.node }}. Value={{ $value }}"

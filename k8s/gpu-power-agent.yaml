@@ -1,0 +1,102 @@
+# ── ServiceAccount ────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gpu-power-agent
+  namespace: operators
+---
+# ── ClusterRole: read + patch nodes (own node only, enforced at app level) ────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: gpu-power-agent-nodes
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: gpu-power-agent-nodes
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: gpu-power-agent-nodes
+subjects:
+  - kind: ServiceAccount
+    name: gpu-power-agent
+    namespace: operators
+---
+# ── ConfigMap ─────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gpu-power-agent-config
+  namespace: operators
+data:
+  POLL_INTERVAL_SEC: "60"
+  DEFAULT_POWER_LIMIT_PCT: "100"
+  WEB_UI_URL: "http://gpu-tracking-web-ui.operators.svc:8080"
+---
+# ── DaemonSet ─────────────────────────────────────────────────────────────────
+# Runs only on nodes with GPUs (label set by NVIDIA GPU Operator).
+# Requires privileged mode to call nvidia-smi -pl.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: gpu-power-agent
+  namespace: operators
+  labels:
+    app: gpu-power-agent
+spec:
+  selector:
+    matchLabels:
+      app: gpu-power-agent
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: gpu-power-agent
+    spec:
+      serviceAccountName: gpu-power-agent
+      # Only run on GPU nodes (NVIDIA GPU Operator sets this label)
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+      tolerations:
+        - operator: Exists
+          effect: NoSchedule
+        - operator: Exists
+          effect: NoExecute
+      hostPID: false
+      containers:
+        - name: agent
+          # Build image: docker build -t <registry>/gpu-power-agent:latest ./gpu-power-agent/
+          image: samunldocker/gpu-power-agent:latest
+          imagePullPolicy: Always
+          command: ["python3", "/app/agent.py"]
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          envFrom:
+            - configMapRef:
+                name: gpu-power-agent-config
+          securityContext:
+            privileged: true          # required for nvidia-smi -pl
+          volumeMounts:
+            - name: dev
+              mountPath: /dev
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "100m"
+              memory: "64Mi"
+      volumes:
+        - name: dev
+          hostPath:
+            path: /dev

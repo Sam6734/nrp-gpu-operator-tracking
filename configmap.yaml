@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: snr-netbox-config
+  namespace: operators
+data:
+  NB_URL: "https://netbox.nrp-nautilus.io"
+  NB_OBJECT_TYPE: "dcim.device"
+  PROM_URL: "http://prometheus-k8s.monitoring.svc:9090"
+  GPUFAILED_RECENT_WINDOW: "1h"
+  METRICS_PORT: "8000"
+  ENABLE_ACTIVE_REMEDIATION: "true"
+  SNR_NAMESPACE: "operators"
+  SNR_SWEEP_PERIOD_SEC: "60"
+  TAINT_SKIP_LIST: "nautilus.io/issue,nautilus.io/system,nautilus.io/ceph,nautilus.io/ceph-external"
+  STUCK_GRACE_MINUTES: "30"
+  STUCK_DELETE_AFTER_MINUTES: "45"
+  LOOKBACK_HOURS: "24"
+  NETBOX_TIMEOUT_SEC: "20"
+  SKIP_LOG_EVERY_SEC: "1800"
+  BLOCKED_LOG_EVERY_SEC: "21600"
+  JOURNAL_MAX_MSG_CHARS: "160"

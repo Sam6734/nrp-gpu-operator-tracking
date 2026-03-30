@@ -1,0 +1,238 @@
+# ── ServiceAccount ────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: snr-netbox-watcher
+  namespace: operators
+---
+# ── ClusterRole: read nodes + patch annotations ───────────────────────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: snr-netbox-watcher-nodes
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: snr-netbox-watcher-nodes
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: snr-netbox-watcher-nodes
+subjects:
+  - kind: ServiceAccount
+    name: snr-netbox-watcher
+    namespace: operators
+---
+# ── Role: watch + delete SelfNodeRemediation CRs ─────────────────────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: snr-netbox-watcher-snr
+  namespace: operators
+rules:
+  - apiGroups: ["self-node-remediation.medik8s.io"]
+    resources: ["selfnoderemediations"]
+    verbs: ["get", "list", "watch", "patch", "update", "delete"]
+  - apiGroups: ["self-node-remediation.medik8s.io"]
+    resources: ["selfnoderemediations/status", "selfnoderemediations/finalizers"]
+    verbs: ["get", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: snr-netbox-watcher-snr
+  namespace: operators
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: snr-netbox-watcher-snr
+subjects:
+  - kind: ServiceAccount
+    name: snr-netbox-watcher
+    namespace: operators
+---
+# ── Role: kopf leader-election peering ───────────────────────────────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: snr-netbox-watcher-kopf-peering
+  namespace: operators
+rules:
+  - apiGroups: ["kopf.dev"]
+    resources: ["clusterkopfpeerings", "kopfpeerings"]
+    verbs: ["get", "list", "watch", "patch", "update", "create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: snr-netbox-watcher-kopf-peering
+  namespace: operators
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: snr-netbox-watcher-kopf-peering
+subjects:
+  - kind: ServiceAccount
+    name: snr-netbox-watcher
+    namespace: operators
+---
+# ── ConfigMap ─────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: snr-netbox-config
+  namespace: operators
+data:
+  NB_URL: "https://netbox.nrp-nautilus.io"
+  NB_OBJECT_TYPE: "dcim.device"
+  PROM_URL: "http://prometheus-k8s.monitoring.svc:9090"
+  GPUFAILED_RECENT_WINDOW: "1h"
+  METRICS_PORT: "8000"
+  SNR_NAMESPACE: "operators"
+  SNR_SWEEP_PERIOD_SEC: "60"
+  TAINT_SKIP_LIST: "nautilus.io/issue,nautilus.io/system,nautilus.io/ceph,nautilus.io/ceph-external"
+  ENABLE_ACTIVE_REMEDIATION: "true"
+  STUCK_GRACE_MINUTES: "30"
+  STUCK_DELETE_AFTER_MINUTES: "45"
+  LOOKBACK_HOURS: "24"
+  NETBOX_TIMEOUT_SEC: "20"
+  SKIP_LOG_EVERY_SEC: "1800"
+  BLOCKED_LOG_EVERY_SEC: "21600"
+  JOURNAL_MAX_MSG_CHARS: "160"
+  # GPU power management
+  GPU_STORM_THRESHOLD: "3"
+  GPU_POWER_LIMIT_PCT_STORM: "80"
+  GPU_POWER_LIMIT_PCT_NORMAL: "100"
+  WEB_UI_URL: "http://gpu-tracking-web-ui.operators.svc:8080"
+---
+# ── Deployment ────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: snr-netbox-watcher
+  namespace: operators
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: snr-netbox-watcher
+  template:
+    metadata:
+      labels:
+        app: snr-netbox-watcher
+    spec:
+      serviceAccountName: snr-netbox-watcher
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: watcher
+          image: samunldocker/snrtest:latest
+          imagePullPolicy: Always
+          command: ["python", "-m", "kopf", "run"]
+          args:
+            - --standalone
+            - --namespace=operators
+            - /app/main.py
+          envFrom:
+            - configMapRef:
+                name: snr-netbox-config
+            - secretRef:
+                name: netbox-token
+          ports:
+            - name: metrics
+              containerPort: 8000
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "20m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "256Mi"
+---
+# ── Service (Prometheus scrape target) ───────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: snr-netbox-watcher
+  namespace: operators
+  labels:
+    app: snr-netbox-watcher
+spec:
+  selector:
+    app: snr-netbox-watcher
+  ports:
+    - name: metrics
+      port: 8000
+      targetPort: metrics
+---
+# ── ServiceMonitor ────────────────────────────────────────────────────────────
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: snr-netbox-watcher
+  namespace: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: snr-netbox-watcher
+  namespaceSelector:
+    matchNames:
+      - operators
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+---
+# ── PrometheusRule ────────────────────────────────────────────────────────────
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: snr-netbox-watcher-alerts
+  namespace: monitoring
+  labels:
+    app: snr-netbox-watcher
+spec:
+  groups:
+    - name: snr-netbox-watcher.rules
+      rules:
+        - alert: SNRWatcherRebootStorm24h
+          expr: sum by (node) (increase(snr_events_total{action="reboot_confirmed"}[24h])) > 3
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Reboot storm on {{ $labels.node }} ({{ $value | printf \"%.0f\" }} reboots in 24h)"
+            description: "Node {{ $labels.node }} has been rebooted {{ $value | printf \"%.0f\" }} times by SNR in the last 24h. GPU power limit has been reduced to 80%."
+
+        - alert: SNRWatcherStuckDeletesStorm24h
+          expr: sum by (node) (increase(snr_watcher_stuck_deletes_total[24h])) > 3
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "SNR stuck on {{ $labels.node }} after {{ $value | printf \"%.0f\" }} attempts"
+            description: "More than 3 stuck SNR CR deletions in the last 24h for node={{ $labels.node }}."
+
+        - alert: GPUPowerLimitReduced
+          expr: snr_gpu_power_annotations_total{pct="80"} > 0
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "GPU power limit reduced to 80% on {{ $labels.node }}"
+            description: "Node {{ $labels.node }} triggered a reboot storm; GPU power limit has been annotated for reduction to 80%."

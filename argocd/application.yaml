@@ -1,0 +1,42 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: gpu-power-management
+  namespace: argo
+  # Finalizer ensures Argo CD cleans up all resources when this Application is deleted
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/Sam6734/nrp-gpu-operator-tracking.git
+    targetRevision: HEAD
+    path: k8s
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: operators
+
+  syncPolicy:
+    automated:
+      prune: true       # remove resources deleted from git
+      selfHeal: true    # re-apply if someone manually edits a resource
+    syncOptions:
+      - CreateNamespace=false          # operators namespace already exists
+      - ServerSideApply=true           # avoids annotation length limits
+      - RespectIgnoreDifferences=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+
+  # Let Argo CD manage resources across namespaces (monitoring ServiceMonitor etc.)
+  ignoreDifferences:
+    - group: ""
+      kind: Secret
+      name: gputrack-postgres-secret
+      jsonPointers:
+        - /data   # exclude Secret data from drift detection (manage externally)

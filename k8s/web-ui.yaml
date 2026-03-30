@@ -1,0 +1,91 @@
+# ── ConfigMap ─────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gpu-tracking-web-ui-config
+  namespace: operators
+data:
+  DB_HOST: "postgresql"
+  DB_PORT: "5432"
+  DB_NAME: "gputrack"
+  DB_USER: "gputrack"
+---
+# ── Deployment ────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gpu-tracking-web-ui
+  namespace: operators
+  labels:
+    app: gpu-tracking-web-ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gpu-tracking-web-ui
+  template:
+    metadata:
+      labels:
+        app: gpu-tracking-web-ui
+    spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: web-ui
+          # Build image: docker build -t <registry>/gpu-tracking-web-ui:latest ./web-ui/
+          image: samunldocker/gpu-tracking-web-ui:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: gpu-tracking-web-ui-config
+          env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: gputrack-postgres-secret
+                  key: POSTGRES_PASSWORD
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "20m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "256Mi"
+---
+# ── Service ───────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: gpu-tracking-web-ui
+  namespace: operators
+  labels:
+    app: gpu-tracking-web-ui
+spec:
+  selector:
+    app: gpu-tracking-web-ui
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

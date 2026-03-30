@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: snr-netbox-watcher
+  namespace: operators
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: snr-netbox-watcher
+  template:
+    metadata:
+      labels:
+        app: snr-netbox-watcher
+    spec:
+      serviceAccountName: snr-netbox-watcher
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: watcher
+          image: samunldocker/snrtest:latest
+          imagePullPolicy: Always
+          command: ["python", "-m", "kopf", "run"]
+          args:
+            - --standalone
+            - --namespace=operators
+            - /app/main.py
+          envFrom:
+            - configMapRef:
+                name: snr-netbox-config
+            - secretRef:
+                name: netbox-token
+          ports:
+            - name: metrics
+              containerPort: 8000
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "20m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "256Mi"
