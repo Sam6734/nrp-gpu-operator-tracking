@@ -61,9 +61,18 @@ spec:
         app: gpu-power-agent
     spec:
       serviceAccountName: gpu-power-agent
-      # Only run on GPU nodes (NVIDIA GPU Operator sets this label)
-      nodeSelector:
-        nvidia.com/gpu.present: "true"
+      # Only run on nodes with the specific GPU models we manage
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: nvidia.com/gpu.product
+                    operator: In
+                    values:
+                      - NVIDIA-GeForce-RTX-3090
+                      - NVIDIA-GeForce-RTX-2080-Ti
+                      - NVIDIA-GeForce-GTX-1080-Ti
       tolerations:
         - operator: Exists
           effect: NoSchedule
