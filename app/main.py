@@ -909,6 +909,32 @@ def _annotate_node_power_policy(node_name: str, pct: int, logger) -> bool:
         return False
 
 
+def _log_operator_event(
+    node_name: str,
+    event_type: str,
+    severity: str,
+    message: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Post a filtered, high-signal operator event to the web UI for display in the dashboard."""
+    if not WEB_UI_URL:
+        return
+    try:
+        requests.post(
+            f"{WEB_UI_URL}/api/events/operator-log",
+            json={
+                "node_name": node_name,
+                "event_type": event_type,
+                "severity": severity,
+                "message": message,
+                "metadata": metadata or {},
+            },
+            timeout=5,
+        )
+    except Exception:
+        pass
+
+
 def _log_reboot_to_webui(
     node_name: str,
     boot_id: str,
@@ -960,6 +986,11 @@ def _handle_gpu_power_on_reboot(
             logger.warning(
                 f"{node_name}: GPU reboot storm ({reboot_count} reboots in 24h); "
                 f"power limit set to {pct}% gpu_model={gpu_model or 'unknown'}"
+            )
+            _log_operator_event(
+                node_name, "reboot_storm", "critical",
+                f"Reboot storm: {reboot_count} reboots in 24h — power throttled to {pct}%",
+                {"reboot_count": reboot_count, "power_pct": pct, "gpu_model": gpu_model},
             )
 
     _log_reboot_to_webui(node_name, boot_id, reboot_count, gpu_model, pct if annotated else None)
@@ -1024,6 +1055,11 @@ def _handle_one_snr(body: Dict[str, Any], name: str, namespace: str, logger) -> 
             if _journal_once(device_id, msg, incident_fp, LOOKBACK_HOURS, logger=logger):
                 logger.info(f"{node_name}: journaled GPUFailed incident fp={incident_fp}")
                 SNR_EVENTS.labels(node=node_name, action="gpufailed_incident_logged").inc()
+                _log_operator_event(
+                    node_name, "gpufailed", "warning",
+                    f"GPU failure detected — xid={xid or 'unknown'} pci={pci_id or 'unknown'}",
+                    {"xid": xid, "pci": pci_id, "reason": cond.get("reason", "")},
+                )
         else:
             logger.warning(f"{node_name}: cannot journal GPUFailed incident because device_id is missing.")
 
@@ -1096,6 +1132,11 @@ def _handle_one_snr(body: Dict[str, Any], name: str, namespace: str, logger) -> 
                     )
                     SNR_AUTO_DELETE_BLOCKS.labels(node=node_name).inc()
                     SNR_EVENTS.labels(node=node_name, action="stuck_delete_blocked_repeated_failures").inc()
+                    _log_operator_event(
+                        node_name, "manual_review_required", "critical",
+                        f"Manual review required: {stuck_delete_count} stuck SNR deletions with no successful reboot",
+                        {"stuck_count": stuck_delete_count, "cr": name, "cr_age_min": cr_age_min},
+                    )
 
                     if device_id:
                         fp = _sha1(f"snr_auto_delete_blocked|{node_name}|{name}|{cr_uid}|{stuck_delete_count}")
@@ -1108,6 +1149,11 @@ def _handle_one_snr(body: Dict[str, Any], name: str, namespace: str, logger) -> 
                         SNR_STUCK_DELETES.labels(node=node_name).inc()
                         SNR_EVENTS.labels(node=node_name, action="stuck_deleted").inc()
                         logger.warning(f"{node_name}: deleted stuck SNR CR {name} age={cr_age_min}m")
+                        _log_operator_event(
+                            node_name, "stuck_snr_deleted", "warning",
+                            f"Stuck SNR CR deleted after {cr_age_min}m — node failed to reboot cleanly",
+                            {"cr": name, "cr_age_min": cr_age_min},
+                        )
 
                         if device_id and cr_uid:
                             fp = _sha1(f"snr_stuck_deleted|{node_name}|{cr_uid}|{name}")

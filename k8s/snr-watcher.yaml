@@ -109,7 +109,7 @@ data:
   JOURNAL_MAX_MSG_CHARS: "160"
   # GPU power management
   GPU_STORM_THRESHOLD: "3"
-  GPU_POWER_LIMIT_PCT_STORM: "80"
+  GPU_POWER_LIMIT_PCT_STORM: "75"
   GPU_POWER_LIMIT_PCT_NORMAL: "100"
   WEB_UI_URL: "http://gpu-tracking-web-ui.operators.svc:8080"
 ---

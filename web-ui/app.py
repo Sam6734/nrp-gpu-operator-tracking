@@ -47,6 +47,19 @@ def init_db():
                 CREATE INDEX IF NOT EXISTS idx_reboot_node ON reboot_events(node_name);
                 CREATE INDEX IF NOT EXISTS idx_reboot_ts   ON reboot_events(created_at DESC);
 
+                CREATE TABLE IF NOT EXISTS operator_events (
+                    id          SERIAL PRIMARY KEY,
+                    node_name   TEXT        NOT NULL,
+                    event_type  TEXT        NOT NULL,
+                    severity    TEXT        NOT NULL DEFAULT 'info',
+                    message     TEXT,
+                    metadata    JSONB,
+                    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_oe_node ON operator_events(node_name);
+                CREATE INDEX IF NOT EXISTS idx_oe_ts   ON operator_events(created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_oe_type ON operator_events(event_type);
+
                 CREATE TABLE IF NOT EXISTS power_limit_events (
                     id                   SERIAL PRIMARY KEY,
                     node_name            TEXT        NOT NULL,
@@ -183,6 +196,53 @@ def api_events():
         "reboot_events": [dict(r) for r in reboots],
         "power_limit_events": [dict(p) for p in power],
     })
+
+
+@app.post("/api/events/operator-log")
+def api_operator_log():
+    data = request.get_json(silent=True) or {}
+    node_name = data.get("node_name", "")
+    if not node_name:
+        abort(400, "node_name required")
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO operator_events
+                   (node_name, event_type, severity, message, metadata)
+                   VALUES (%s, %s, %s, %s, %s)""",
+                (
+                    node_name,
+                    data.get("event_type", "unknown"),
+                    data.get("severity", "info"),
+                    data.get("message"),
+                    psycopg2.extras.Json(data.get("metadata") or {}),
+                ),
+            )
+        conn.commit()
+    return jsonify({"ok": True}), 201
+
+
+@app.get("/api/events/operator-log")
+def api_get_operator_log():
+    limit = min(int(request.args.get("limit", 200)), 1000)
+    node  = request.args.get("node")
+    severity = request.args.get("severity")  # filter: warning, critical
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            filters = []
+            params  = []
+            if node:
+                filters.append("node_name = %s"); params.append(node)
+            if severity:
+                filters.append("severity = %s"); params.append(severity)
+            where = ("WHERE " + " AND ".join(filters)) if filters else ""
+            params.append(limit)
+            cur.execute(
+                f"SELECT * FROM operator_events {where} ORDER BY created_at DESC LIMIT %s",
+                params,
+            )
+            rows = cur.fetchall()
+    return jsonify([dict(r) for r in rows])
 
 
 @app.get("/healthz")

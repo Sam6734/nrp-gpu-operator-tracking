@@ -3,124 +3,406 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>GPU Power Management Dashboard</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <title>GPU Power Management</title>
   <style>
-    body { background: #0d1117; color: #e6edf3; font-family: 'Segoe UI', system-ui, sans-serif; }
-    .navbar { background: #161b22; border-bottom: 1px solid #30363d; }
-    .card { background: #161b22; border: 1px solid #30363d; }
-    .card-header { background: #1c2128; border-bottom: 1px solid #30363d; font-weight: 600; }
-    .table { color: #e6edf3; }
-    .table th { color: #8b949e; font-size: 0.8rem; text-transform: uppercase; letter-spacing: .05em; border-color: #30363d; }
-    .table td { border-color: #21262d; vertical-align: middle; font-size: 0.9rem; }
-    .badge-storm { background: #da3633; }
-    .badge-ok    { background: #238636; }
-    .badge-warn  { background: #9e6a03; }
-    .stat-card { text-align: center; padding: 1.25rem; }
-    .stat-num  { font-size: 2.2rem; font-weight: 700; line-height: 1; }
-    .stat-label{ font-size: 0.8rem; color: #8b949e; margin-top: .3rem; }
-    .pct-bar   { height: 6px; border-radius: 3px; background: #21262d; margin-top: 4px; }
-    .pct-fill  { height: 100%; border-radius: 3px; background: #238636; transition: width .4s; }
-    .pct-fill.warn  { background: #9e6a03; }
-    .pct-fill.storm { background: #da3633; }
-    .refresh-btn { font-size: 0.8rem; }
-    #last-updated { font-size: 0.75rem; color: #8b949e; }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #090d14;
+      --surface:   #0e1520;
+      --surface2:  #141c2b;
+      --border:    #1e2d45;
+      --border2:   #253650;
+      --text:      #cdd9e5;
+      --muted:     #5c7394;
+      --accent:    #388bfd;
+      --green:     #3fb950;
+      --yellow:    #d29922;
+      --orange:    #e3722a;
+      --red:       #f85149;
+      --cyan:      #39c5cf;
+      --glow-blue: rgba(56,139,253,.15);
+      --glow-red:  rgba(248,81,73,.15);
+      --glow-grn:  rgba(63,185,80,.12);
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+
+    /* ── Scrollbar ── */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: var(--surface); }
+    ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+
+    /* ── Topbar ── */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: .9rem 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      backdrop-filter: blur(8px);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: .6rem;
+      font-size: 1rem;
+      font-weight: 700;
+      letter-spacing: .02em;
+      color: #fff;
+    }
+    .brand-icon {
+      width: 28px; height: 28px;
+      background: linear-gradient(135deg, var(--accent), var(--cyan));
+      border-radius: 6px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px;
+    }
+    .brand-sub { font-size: .7rem; font-weight: 400; color: var(--muted); display: block; }
+    .header-right { display: flex; align-items: center; gap: 1rem; }
+    #last-updated { font-size: .72rem; color: var(--muted); }
+    .pulse-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0 0 rgba(63,185,80,.6);
+      animation: pulse 2.5s infinite;
+      display: inline-block;
+      margin-right: .35rem;
+    }
+    @keyframes pulse {
+      0%   { box-shadow: 0 0 0 0 rgba(63,185,80,.6); }
+      70%  { box-shadow: 0 0 0 6px rgba(63,185,80,0); }
+      100% { box-shadow: 0 0 0 0 rgba(63,185,80,0); }
+    }
+    .btn-refresh {
+      background: transparent;
+      border: 1px solid var(--border2);
+      color: var(--muted);
+      padding: .3rem .75rem;
+      border-radius: 6px;
+      font-size: .75rem;
+      cursor: pointer;
+      transition: all .2s;
+    }
+    .btn-refresh:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* ── Layout ── */
+    .container { max-width: 1600px; margin: 0 auto; padding: 1.5rem; }
+
+    /* ── Stat cards ── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    @media (max-width: 900px) { .stats-grid { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 500px) { .stats-grid { grid-template-columns: 1fr; } }
+
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.2rem 1.4rem;
+      position: relative;
+      overflow: hidden;
+      transition: border-color .2s;
+    }
+    .stat-card::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      opacity: 0;
+      transition: opacity .3s;
+    }
+    .stat-card:hover { border-color: var(--border2); }
+    .stat-card:hover::before { opacity: 1; }
+    .stat-card.c-blue::before  { background: var(--glow-blue); }
+    .stat-card.c-red::before   { background: var(--glow-red); }
+    .stat-card.c-green::before { background: var(--glow-grn); }
+    .stat-card.c-yellow::before{ background: rgba(210,153,34,.1); }
+
+    .stat-label { font-size: .72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: .5rem; }
+    .stat-num   { font-size: 2.4rem; font-weight: 800; line-height: 1; letter-spacing: -.02em; }
+    .stat-num.blue   { color: var(--accent); }
+    .stat-num.red    { color: var(--red); }
+    .stat-num.green  { color: var(--green); }
+    .stat-num.yellow { color: var(--yellow); }
+    .stat-icon {
+      position: absolute;
+      right: 1.2rem; top: 50%;
+      transform: translateY(-50%);
+      font-size: 2rem;
+      opacity: .08;
+    }
+
+    /* ── Panel cards ── */
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      margin-bottom: 1.5rem;
+    }
+    .panel-header {
+      background: var(--surface2);
+      border-bottom: 1px solid var(--border);
+      padding: .75rem 1.2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+    .panel-title {
+      font-size: .82rem;
+      font-weight: 600;
+      color: #fff;
+      text-transform: uppercase;
+      letter-spacing: .07em;
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+    }
+    .panel-title .dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+    .panel-title .dot.red    { background: var(--red); }
+    .panel-title .dot.green  { background: var(--green); }
+    .panel-title .dot.yellow { background: var(--yellow); }
+
+    /* ── Filter input ── */
+    .filter-input {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: .3rem .7rem;
+      border-radius: 6px;
+      font-size: .78rem;
+      outline: none;
+      transition: border-color .2s;
+      width: 180px;
+    }
+    .filter-input:focus { border-color: var(--accent); }
+
+    /* ── Tables ── */
+    .tbl-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    thead th {
+      padding: .55rem 1rem;
+      font-size: .7rem;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+      background: var(--surface2);
+    }
+    tbody tr {
+      border-bottom: 1px solid var(--border);
+      transition: background .15s;
+    }
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: var(--surface2); }
+    tbody td {
+      padding: .55rem 1rem;
+      font-size: .82rem;
+      vertical-align: middle;
+      white-space: nowrap;
+    }
+    code {
+      background: rgba(56,139,253,.1);
+      color: var(--accent);
+      padding: .1em .45em;
+      border-radius: 4px;
+      font-size: .78rem;
+      font-family: 'Cascadia Code', 'Fira Code', monospace;
+    }
+
+    /* ── Badges ── */
+    .badge {
+      display: inline-block;
+      padding: .18em .6em;
+      border-radius: 4px;
+      font-size: .7rem;
+      font-weight: 700;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+    .badge-ok     { background: rgba(63,185,80,.15);  color: var(--green);  border: 1px solid rgba(63,185,80,.3); }
+    .badge-storm  { background: rgba(248,81,73,.15);  color: var(--red);    border: 1px solid rgba(248,81,73,.3); }
+    .badge-warn   { background: rgba(210,153,34,.15); color: var(--yellow); border: 1px solid rgba(210,153,34,.3); }
+    .badge-info   { background: rgba(56,139,253,.12); color: var(--accent); border: 1px solid rgba(56,139,253,.25); }
+    .badge-orange { background: rgba(227,114,42,.15); color: var(--orange); border: 1px solid rgba(227,114,42,.3); }
+
+    /* ── Power bar ── */
+    .pct-wrap { min-width: 80px; }
+    .pct-val  { font-size: .8rem; font-weight: 600; margin-bottom: 3px; }
+    .pct-bar  { height: 4px; background: var(--border); border-radius: 2px; }
+    .pct-fill { height: 100%; border-radius: 2px; transition: width .5s ease; }
+    .pct-fill.ok    { background: var(--green); }
+    .pct-fill.warn  { background: var(--yellow); }
+    .pct-fill.storm { background: var(--red); }
+
+    /* ── Operator events ── */
+    .ev-row td:first-child { padding-left: 0; width: 4px; }
+    .ev-sev-bar { width: 3px; height: 100%; border-radius: 0 2px 2px 0; }
+    .sev-critical .ev-sev-bar { background: var(--red); }
+    .sev-warning  .ev-sev-bar { background: var(--orange); }
+    .sev-info     .ev-sev-bar { background: var(--accent); }
+    .ev-msg { font-size: .82rem; color: var(--text); white-space: normal; max-width: 480px; }
+    .ev-meta { font-size: .72rem; color: var(--muted); margin-top: .15rem; }
+
+    /* ── Two-col events grid ── */
+    .events-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+    }
+    @media (max-width: 1100px) { .events-grid { grid-template-columns: 1fr; } }
+
+    /* ── Empty state ── */
+    .empty {
+      padding: 2.5rem;
+      text-align: center;
+      color: var(--muted);
+      font-size: .82rem;
+    }
   </style>
 </head>
 <body>
 
-<nav class="navbar navbar-dark px-4 py-3 mb-4">
-  <span class="navbar-brand fw-bold">GPU Power Management</span>
-  <div class="d-flex align-items-center gap-3">
-    <span id="last-updated"></span>
-    <button class="btn btn-outline-secondary btn-sm refresh-btn" onclick="loadAll()">Refresh</button>
+<header>
+  <div class="brand">
+    <div class="brand-icon">⚡</div>
+    <div>
+      GPU Power Management
+      <span class="brand-sub">NRP Nautilus · RTX Fleet</span>
+    </div>
   </div>
-</nav>
+  <div class="header-right">
+    <span id="last-updated"></span>
+    <button class="btn-refresh" onclick="loadAll()">↻ Refresh</button>
+  </div>
+</header>
 
-<div class="container-fluid px-4">
+<div class="container">
 
-  <!-- Summary stats -->
-  <div class="row g-3 mb-4" id="stats-row">
-    <div class="col-6 col-md-3">
-      <div class="card stat-card">
-        <div class="stat-num text-info" id="stat-nodes">—</div>
-        <div class="stat-label">GPU Nodes Tracked</div>
-      </div>
+  <!-- Stats -->
+  <div class="stats-grid">
+    <div class="stat-card c-blue">
+      <div class="stat-label">GPU Nodes Tracked</div>
+      <div class="stat-num blue" id="stat-nodes">—</div>
+      <div class="stat-icon">🖥</div>
     </div>
-    <div class="col-6 col-md-3">
-      <div class="card stat-card">
-        <div class="stat-num text-warning" id="stat-reboots-24h">—</div>
-        <div class="stat-label">Reboots (last 24 h)</div>
-      </div>
+    <div class="stat-card c-yellow">
+      <div class="stat-label">Reboots (24 h)</div>
+      <div class="stat-num yellow" id="stat-reboots-24h">—</div>
+      <div class="stat-icon">🔄</div>
     </div>
-    <div class="col-6 col-md-3">
-      <div class="card stat-card">
-        <div class="stat-num text-danger" id="stat-storm-nodes">—</div>
-        <div class="stat-label">Nodes in Storm State</div>
-      </div>
+    <div class="stat-card c-red">
+      <div class="stat-label">Nodes in Storm</div>
+      <div class="stat-num red" id="stat-storm-nodes">—</div>
+      <div class="stat-icon">⚠</div>
     </div>
-    <div class="col-6 col-md-3">
-      <div class="card stat-card">
-        <div class="stat-num text-success" id="stat-power-events">—</div>
-        <div class="stat-label">Power Limit Events</div>
-      </div>
+    <div class="stat-card c-green">
+      <div class="stat-label">Power Events</div>
+      <div class="stat-num green" id="stat-power-events">—</div>
+      <div class="stat-icon">⚡</div>
     </div>
   </div>
 
   <!-- Node table -->
-  <div class="card mb-4">
-    <div class="card-header d-flex justify-content-between align-items-center">
-      <span>Node Status</span>
-      <input class="form-control form-control-sm w-auto" id="node-filter" placeholder="Filter nodes…" oninput="filterTable()">
+  <div class="panel">
+    <div class="panel-header">
+      <div class="panel-title"><span class="dot"></span>Node Status</div>
+      <input class="filter-input" id="node-filter" placeholder="Filter nodes…" oninput="filterTable()">
     </div>
-    <div class="card-body p-0">
-      <div class="table-responsive">
-        <table class="table table-hover mb-0" id="node-table">
-          <thead><tr>
-            <th>Node</th>
-            <th>GPU Model</th>
-            <th>Reboots (24h)</th>
-            <th>Total Reboots</th>
-            <th>Last Reboot</th>
-            <th>Power Limit</th>
-            <th>State</th>
-          </tr></thead>
-          <tbody id="node-tbody"></tbody>
-        </table>
-      </div>
+    <div class="tbl-wrap">
+      <table id="node-table">
+        <thead><tr>
+          <th>Node</th>
+          <th>GPU Model</th>
+          <th>Reboots (24h)</th>
+          <th>Total Reboots</th>
+          <th>Last Reboot</th>
+          <th>Power Limit</th>
+          <th>State</th>
+        </tr></thead>
+        <tbody id="node-tbody"></tbody>
+      </table>
     </div>
   </div>
 
-  <!-- Recent events -->
-  <div class="row g-3">
-    <div class="col-lg-6">
-      <div class="card">
-        <div class="card-header">Recent Reboots</div>
-        <div class="card-body p-0">
-          <div class="table-responsive">
-            <table class="table table-hover mb-0">
-              <thead><tr>
-                <th>Time</th><th>Node</th><th>GPU Model</th><th>Count 24h</th><th>Power%</th>
-              </tr></thead>
-              <tbody id="reboot-tbody"></tbody>
-            </table>
-          </div>
-        </div>
+  <!-- Operator events -->
+  <div class="panel">
+    <div class="panel-header">
+      <div class="panel-title"><span class="dot red"></span>Operator Events</div>
+      <div style="display:flex;gap:.5rem;align-items:center;">
+        <select class="filter-input" id="sev-filter" onchange="loadOperatorEvents()" style="width:130px;">
+          <option value="">All severities</option>
+          <option value="critical">Critical</option>
+          <option value="warning">Warning</option>
+          <option value="info">Info</option>
+        </select>
       </div>
     </div>
-    <div class="col-lg-6">
-      <div class="card">
-        <div class="card-header">Recent Power Limit Changes</div>
-        <div class="card-body p-0">
-          <div class="table-responsive">
-            <table class="table table-hover mb-0">
-              <thead><tr>
-                <th>Time</th><th>Node</th><th>GPU</th><th>Old→New (W)</th><th>%</th><th>Status</th>
-              </tr></thead>
-              <tbody id="power-tbody"></tbody>
-            </table>
-          </div>
-        </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th style="width:4px;padding:0;"></th>
+          <th>Time</th>
+          <th>Node</th>
+          <th>Event</th>
+          <th>Severity</th>
+          <th>Message</th>
+        </tr></thead>
+        <tbody id="op-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Reboot + Power cols -->
+  <div class="events-grid">
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title"><span class="dot yellow"></span>Recent Reboots</div>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr>
+            <th>Time</th><th>Node</th><th>GPU</th><th>Count 24h</th><th>Power%</th>
+          </tr></thead>
+          <tbody id="reboot-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title"><span class="dot green"></span>Power Limit Changes</div>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr>
+            <th>Time</th><th>Node</th><th>GPU</th><th>Old→New (W)</th><th>%</th><th>Status</th>
+          </tr></thead>
+          <tbody id="power-tbody"></tbody>
+        </table>
       </div>
     </div>
   </div>
@@ -133,22 +415,41 @@ const STORM_THRESHOLD = 3;
 function fmtTime(ts) {
   if (!ts) return '—';
   const d = new Date(ts);
-  const age = Date.now() - d;
-  if (age < 60000) return 'just now';
-  if (age < 3600000) return Math.floor(age/60000) + 'm ago';
-  if (age < 86400000) return Math.floor(age/3600000) + 'h ago';
-  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString();
+  const age = Date.now() - d.getTime();
+  if (age < 60000)    return '<span class="pulse-dot"></span>just now';
+  if (age < 3600000)  return Math.floor(age / 60000) + 'm ago';
+  if (age < 86400000) return Math.floor(age / 3600000) + 'h ago';
+  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
 }
 
-function stateBadge(reboots24h) {
-  if (reboots24h >= STORM_THRESHOLD) return '<span class="badge badge-storm">STORM</span>';
-  if (reboots24h > 0) return '<span class="badge badge-warn">UNSTABLE</span>';
+function stateBadge(r24) {
+  if (r24 >= STORM_THRESHOLD) return '<span class="badge badge-storm">Storm</span>';
+  if (r24 > 0)                return '<span class="badge badge-warn">Unstable</span>';
   return '<span class="badge badge-ok">OK</span>';
 }
 
+function sevBadge(sev) {
+  if (sev === 'critical') return '<span class="badge badge-storm">Critical</span>';
+  if (sev === 'warning')  return '<span class="badge badge-orange">Warning</span>';
+  return '<span class="badge badge-info">Info</span>';
+}
+
+function evTypeFmt(t) {
+  return (t || 'unknown').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
 function pctBar(pct) {
-  const cls = pct <= 80 ? 'storm' : pct <= 90 ? 'warn' : '';
-  return `<div>${pct ?? 100}%<div class="pct-bar"><div class="pct-fill ${cls}" style="width:${pct ?? 100}%"></div></div></div>`;
+  const v   = pct ?? 100;
+  const cls = v <= 80 ? 'storm' : v <= 90 ? 'warn' : 'ok';
+  const col = v <= 80 ? 'var(--red)' : v <= 90 ? 'var(--yellow)' : 'var(--green)';
+  return `<div class="pct-wrap">
+    <div class="pct-val" style="color:${col}">${v}%</div>
+    <div class="pct-bar"><div class="pct-fill ${cls}" style="width:${v}%"></div></div>
+  </div>`;
+}
+
+function empty(msg) {
+  return `<tr><td colspan="99"><div class="empty">${msg}</div></td></tr>`;
 }
 
 async function loadAll() {
@@ -160,23 +461,35 @@ async function loadAll() {
     const nodes  = await nodesRes.json();
     const events = await eventsRes.json();
 
+    renderStats(nodes, events);
     renderNodes(nodes);
     renderReboots(events.reboot_events || []);
     renderPower(events.power_limit_events || []);
-    renderStats(nodes, events);
 
-    document.getElementById('last-updated').textContent =
-      'Updated ' + new Date().toLocaleTimeString();
+    const ts = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    document.getElementById('last-updated').innerHTML =
+      `<span class="pulse-dot"></span>Updated ${ts}`;
   } catch(e) {
     console.error('Failed to load data:', e);
   }
+  loadOperatorEvents();
+}
+
+async function loadOperatorEvents() {
+  const sev = document.getElementById('sev-filter').value;
+  const url  = '/api/events/operator-log?limit=100' + (sev ? `&severity=${sev}` : '');
+  try {
+    const res  = await fetch(url);
+    const rows = await res.json();
+    renderOperatorEvents(rows);
+  } catch(e) { console.error('op-events failed:', e); }
 }
 
 function renderStats(nodes, events) {
-  const reboots24h  = nodes.reduce((s,n) => s + (n.reboots_24h||0), 0);
-  const stormNodes  = nodes.filter(n => n.reboots_24h >= STORM_THRESHOLD).length;
-  const powerEvents = (events.power_limit_events||[]).length;
-  document.getElementById('stat-nodes').textContent      = nodes.length;
+  const reboots24h  = nodes.reduce((s, n) => s + (n.reboots_24h || 0), 0);
+  const stormNodes  = nodes.filter(n => (n.reboots_24h || 0) >= STORM_THRESHOLD).length;
+  const powerEvents = (events.power_limit_events || []).length;
+  document.getElementById('stat-nodes').textContent       = nodes.length;
   document.getElementById('stat-reboots-24h').textContent = reboots24h;
   document.getElementById('stat-storm-nodes').textContent = stormNodes;
   document.getElementById('stat-power-events').textContent = powerEvents;
@@ -184,6 +497,7 @@ function renderStats(nodes, events) {
 
 function renderNodes(nodes) {
   const tbody = document.getElementById('node-tbody');
+  if (!nodes.length) { tbody.innerHTML = empty('No nodes tracked yet.'); return; }
   tbody.innerHTML = nodes.map(n => `
     <tr>
       <td><code>${n.node_name}</code></td>
@@ -196,28 +510,49 @@ function renderNodes(nodes) {
     </tr>`).join('');
 }
 
+function renderOperatorEvents(rows) {
+  const tbody = document.getElementById('op-tbody');
+  if (!rows.length) { tbody.innerHTML = empty('No operator events.'); return; }
+  tbody.innerHTML = rows.map(r => `
+    <tr class="sev-${r.severity || 'info'}">
+      <td style="padding:0;"><div class="ev-sev-bar" style="min-height:40px;"></div></td>
+      <td>${fmtTime(r.created_at)}</td>
+      <td><code>${r.node_name}</code></td>
+      <td>${evTypeFmt(r.event_type)}</td>
+      <td>${sevBadge(r.severity)}</td>
+      <td>
+        <div class="ev-msg">${escHtml(r.message || '—')}</div>
+        ${r.metadata && Object.keys(r.metadata).length
+          ? `<div class="ev-meta">${Object.entries(r.metadata).map(([k,v]) => `${k}: ${v}`).join(' · ')}</div>`
+          : ''}
+      </td>
+    </tr>`).join('');
+}
+
 function renderReboots(events) {
   const tbody = document.getElementById('reboot-tbody');
+  if (!events.length) { tbody.innerHTML = empty('No reboot events.'); return; }
   tbody.innerHTML = events.map(e => `
     <tr>
       <td>${fmtTime(e.created_at)}</td>
       <td><code>${e.node_name}</code></td>
-      <td>${e.gpu_model || '—'}</td>
+      <td style="color:var(--muted)">${e.gpu_model || '—'}</td>
       <td>${e.reboot_count_24h || 0}</td>
-      <td>${e.power_pct_applied != null ? e.power_pct_applied+'%' : '—'}</td>
+      <td>${e.power_pct_applied != null ? `<span style="color:var(--yellow)">${e.power_pct_applied}%</span>` : '—'}</td>
     </tr>`).join('');
 }
 
 function renderPower(events) {
   const tbody = document.getElementById('power-tbody');
+  if (!events.length) { tbody.innerHTML = empty('No power events.'); return; }
   tbody.innerHTML = events.map(e => `
     <tr>
       <td>${fmtTime(e.applied_at)}</td>
       <td><code>${e.node_name}</code></td>
-      <td>GPU ${e.gpu_index ?? '?'}</td>
-      <td>${e.old_power_limit_watts ?? '?'}→${e.new_power_limit_watts ?? '?'}</td>
-      <td>${e.target_pct != null ? e.target_pct+'%' : '—'}</td>
-      <td><span class="badge ${e.status==='applied'?'badge-ok':'badge-storm'}">${e.status}</span></td>
+      <td style="color:var(--muted)">GPU ${e.gpu_index ?? '?'}</td>
+      <td>${e.old_power_limit_watts ?? '?'} → <strong>${e.new_power_limit_watts ?? '?'}</strong></td>
+      <td>${e.target_pct != null ? `<span style="color:${e.target_pct < 90 ? 'var(--yellow)' : 'var(--green)'}">${e.target_pct}%</span>` : '—'}</td>
+      <td><span class="badge ${e.status === 'applied' ? 'badge-ok' : 'badge-storm'}">${e.status}</span></td>
     </tr>`).join('');
 }
 
@@ -226,6 +561,14 @@ function filterTable() {
   document.querySelectorAll('#node-tbody tr').forEach(row => {
     row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
   });
+}
+
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 loadAll();
