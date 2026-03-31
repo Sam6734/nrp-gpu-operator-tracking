@@ -55,6 +55,10 @@ GPU_POWER_LIMIT_PCT_STORM = int(os.environ.get("GPU_POWER_LIMIT_PCT_STORM", "80"
 GPU_POWER_LIMIT_PCT_NORMAL = int(os.environ.get("GPU_POWER_LIMIT_PCT_NORMAL", "100"))
 WEB_UI_URL = os.environ.get("WEB_UI_URL", "").rstrip("/")
 
+# In-memory dedup for non-gpufailed reboots logged to web UI (avoids re-posting on every sweep).
+# Lost on operator restart, which is acceptable — worst case: one duplicate entry.
+_webui_reboot_boot_ids_sent: set = set()
+
 UNREACHABLE_TAINT_KEYS = {
     "node.kubernetes.io/unreachable",
     "node.kubernetes.io/not-ready",
@@ -909,6 +913,20 @@ def _annotate_node_power_policy(node_name: str, pct: int, logger) -> bool:
         return False
 
 
+def _post_to_webui(url: str, payload: dict, retries: int = 2) -> bool:
+    """POST to the web UI with simple retry. Returns True if successful."""
+    for attempt in range(retries):
+        try:
+            r = requests.post(url, json=payload, timeout=5)
+            if r.status_code < 500:
+                return True
+        except Exception:
+            pass
+        if attempt < retries - 1:
+            time.sleep(2)
+    return False
+
+
 def _log_operator_event(
     node_name: str,
     event_type: str,
@@ -919,20 +937,16 @@ def _log_operator_event(
     """Post a filtered, high-signal operator event to the web UI for display in the dashboard."""
     if not WEB_UI_URL:
         return
-    try:
-        requests.post(
-            f"{WEB_UI_URL}/api/events/operator-log",
-            json={
-                "node_name": node_name,
-                "event_type": event_type,
-                "severity": severity,
-                "message": message,
-                "metadata": metadata or {},
-            },
-            timeout=5,
-        )
-    except Exception:
-        pass
+    _post_to_webui(
+        f"{WEB_UI_URL}/api/events/operator-log",
+        {
+            "node_name": node_name,
+            "event_type": event_type,
+            "severity": severity,
+            "message": message,
+            "metadata": metadata or {},
+        },
+    )
 
 
 def _log_reboot_to_webui(
@@ -941,23 +955,19 @@ def _log_reboot_to_webui(
     reboot_count: int,
     gpu_model: str,
     power_pct_applied: Optional[int],
-) -> None:
+) -> bool:
     if not WEB_UI_URL:
-        return
-    try:
-        requests.post(
-            f"{WEB_UI_URL}/api/events/reboot",
-            json={
-                "node_name": node_name,
-                "boot_id": boot_id,
-                "reboot_count_24h": reboot_count,
-                "gpu_model": gpu_model,
-                "power_pct_applied": power_pct_applied,
-            },
-            timeout=5,
-        )
-    except Exception:
-        pass
+        return False
+    return _post_to_webui(
+        f"{WEB_UI_URL}/api/events/reboot",
+        {
+            "node_name": node_name,
+            "boot_id": boot_id,
+            "reboot_count_24h": reboot_count,
+            "gpu_model": gpu_model,
+            "power_pct_applied": power_pct_applied,
+        },
+    )
 
 
 def _handle_gpu_power_on_reboot(
@@ -1075,8 +1085,15 @@ def _handle_one_snr(body: Dict[str, Any], name: str, namespace: str, logger) -> 
             if _journal_once(device_id, msg, reboot_fp, LOOKBACK_HOURS, logger=logger):
                 logger.info(f"{node_name}: journaled reboot-confirmed bootid={boot_id}")
                 SNR_EVENTS.labels(node=node_name, action="reboot_confirmed").inc()
-                # D) GPU power management: annotate node with target power limit
+                # D) GPU power management: annotate node with target power limit + log reboot to web UI
                 _handle_gpu_power_on_reboot(node_name, node_obj, device_id, boot_id, logger)
+    elif device_id and boot_id and boot_id not in _webui_reboot_boot_ids_sent:
+        # Reboot detected but gpufailed not recent — still log to web UI for visibility,
+        # but skip power annotation (no GPU fault associated with this reboot).
+        if not _bootid_seen_recently(device_id, boot_id, LOOKBACK_HOURS, logger=logger):
+            gpu_model = _get_gpu_model_from_node(node_obj)
+            if _log_reboot_to_webui(node_name, boot_id, 0, gpu_model, None):
+                _webui_reboot_boot_ids_sent.add(boot_id)
 
     # C) Optional remediation: delete stuck SNR CRs
     if ENABLE_ACTIVE_REMEDIATION and cr_age_min is not None and gpufailed_recent:
