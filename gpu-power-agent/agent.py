@@ -6,6 +6,11 @@ snr-netbox-watcher operator and applies the corresponding power limit to
 all NVIDIA GPUs via nvidia-smi.  After applying, it writes back
 `gpu-power-mgmt/applied-limit-watts` and `gpu-power-mgmt/applied-at`
 annotations and logs the event to the web-ui API.
+
+Drift correction: every DRIFT_CHECK_INTERVAL_SEC (default 600s / 10 min),
+if the annotation is present and valid, the live nvidia-smi power limit for
+each GPU is compared against the target. Any GPU that has drifted is
+corrected. If the annotation is absent or invalid, nothing is done.
 """
 import os
 import sys
@@ -27,12 +32,14 @@ log = logging.getLogger("gpu-power-agent")
 
 NODE_NAME: str = os.environ.get("NODE_NAME", "")
 POLL_INTERVAL_SEC: int = int(os.environ.get("POLL_INTERVAL_SEC", "60"))
+DRIFT_CHECK_INTERVAL_SEC: int = int(os.environ.get("DRIFT_CHECK_INTERVAL_SEC", "600"))
 WEB_UI_URL: str = os.environ.get("WEB_UI_URL", "").rstrip("/")
-DEFAULT_POWER_LIMIT_PCT: int = int(os.environ.get("DEFAULT_POWER_LIMIT_PCT", "100"))
 
 if not NODE_NAME:
     log.error("NODE_NAME env var is required (set via Downward API fieldRef spec.nodeName)")
     sys.exit(1)
+
+ANNOTATION_KEY = "gpu-power-mgmt/target-limit-pct"
 
 
 # ---------- nvidia-smi helpers ----------
@@ -144,13 +151,24 @@ def _utcnow_str() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def apply_policy_if_needed(annotations: dict) -> None:
-    raw_pct = annotations.get("gpu-power-mgmt/target-limit-pct", str(DEFAULT_POWER_LIMIT_PCT))
+def _get_target_pct(annotations: dict) -> Optional[int]:
+    """Return the target power limit pct from annotations, or None if absent/invalid."""
+    raw = annotations.get(ANNOTATION_KEY)
+    if raw is None:
+        return None
     try:
-        target_pct = int(raw_pct)
+        return int(raw)
     except ValueError:
-        log.warning(f"Invalid gpu-power-mgmt/target-limit-pct value: {raw_pct!r}; using {DEFAULT_POWER_LIMIT_PCT}")
-        target_pct = DEFAULT_POWER_LIMIT_PCT
+        log.warning(f"Invalid {ANNOTATION_KEY} value: {raw!r} — skipping")
+        return None
+
+
+def apply_policy_if_needed(annotations: dict) -> None:
+    """Apply power limit to all GPUs based on the target annotation. Skips if annotation absent."""
+    target_pct = _get_target_pct(annotations)
+    if target_pct is None:
+        log.info("No target-limit-pct annotation — skipping power policy.")
+        return
 
     gpus = get_gpu_info()
     if not gpus:
@@ -190,27 +208,86 @@ def apply_policy_if_needed(annotations: dict) -> None:
         log.warning(f"Failed to write applied annotations: {e}")
 
 
+def check_and_correct_drift(annotations: dict) -> None:
+    """Every DRIFT_CHECK_INTERVAL_SEC: re-apply power limit for any GPU that has drifted.
+    Silently skips if the target annotation is absent or invalid."""
+    target_pct = _get_target_pct(annotations)
+    if target_pct is None:
+        return
+
+    gpus = get_gpu_info()
+    if not gpus:
+        return
+
+    drifted = []
+    for gpu in gpus:
+        max_w = gpu["max_power_w"]
+        target_w = max(1, int(max_w * target_pct / 100))
+        if gpu["current_limit_w"] != target_w:
+            drifted.append((gpu, target_w))
+
+    if not drifted:
+        log.info(f"Drift check: all {len(gpus)} GPUs at correct limit ({target_pct}%)")
+        return
+
+    log.warning(f"Drift check: {len(drifted)}/{len(gpus)} GPUs drifted — correcting")
+    all_ok = True
+    for gpu, target_w in drifted:
+        old_w = gpu["current_limit_w"]
+        ok = apply_power_limit(gpu["index"], target_w)
+        status = "drift_corrected" if ok else "drift_correction_failed"
+        log.warning(f"GPU {gpu['index']}: drift {old_w}W → {target_w}W ({status})")
+        _log_power_event_to_webui(
+            gpu_index=gpu["index"],
+            gpu_name=gpu["name"],
+            old_limit_w=old_w,
+            new_limit_w=target_w,
+            target_pct=target_pct,
+            status=status,
+        )
+        if not ok:
+            all_ok = False
+
+    try:
+        patch_node_annotations({
+            "gpu-power-mgmt/applied-at": _utcnow_str(),
+            "gpu-power-mgmt/apply-status": "ok" if all_ok else "partial",
+        })
+    except Exception as e:
+        log.warning(f"Failed to update applied-at after drift correction: {e}")
+
+
 def run() -> None:
-    log.info(f"gpu-power-agent starting on node={NODE_NAME} poll_interval={POLL_INTERVAL_SEC}s")
+    log.info(
+        f"gpu-power-agent starting on node={NODE_NAME} "
+        f"poll={POLL_INTERVAL_SEC}s drift_check={DRIFT_CHECK_INTERVAL_SEC}s"
+    )
     try:
         config.load_incluster_config()
     except Exception:
         config.load_kube_config()
 
     last_pct: Optional[str] = None
+    last_drift_check: float = 0.0
 
     while True:
         try:
             annotations = read_node_annotations()
-            current_pct = annotations.get(
-                "gpu-power-mgmt/target-limit-pct",
-                str(DEFAULT_POWER_LIMIT_PCT),
-            )
-            # Apply on startup (last_pct is None) or whenever the annotation changes
+            current_pct = annotations.get(ANNOTATION_KEY)
+
+            # Apply on startup (last_pct is None) or whenever the annotation changes.
+            # If annotation is absent, current_pct is None; apply_policy_if_needed will skip.
             if current_pct != last_pct:
                 log.info(f"Power policy changed: {last_pct!r} -> {current_pct!r}; applying...")
                 apply_policy_if_needed(annotations)
                 last_pct = current_pct
+                last_drift_check = time.monotonic()  # reset drift timer after a full apply
+
+            # Drift correction every DRIFT_CHECK_INTERVAL_SEC
+            elif time.monotonic() - last_drift_check >= DRIFT_CHECK_INTERVAL_SEC:
+                check_and_correct_drift(annotations)
+                last_drift_check = time.monotonic()
+
         except Exception as e:
             log.warning(f"Error in main loop: {e}")
 
