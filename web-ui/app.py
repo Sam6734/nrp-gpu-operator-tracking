@@ -369,9 +369,64 @@ def healthz():
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
 
+@app.get("/api/gpu-inventory")
+def api_gpu_inventory():
+    """Fleet-wide GPU inventory: actual vs expected counts for all nodes."""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                WITH actual_gpu_counts AS (
+                    SELECT
+                        p.node_name,
+                        COUNT(DISTINCT p.gpu_index) AS actual_gpu_count,
+                        MAX(p.gpu_model)            AS gpu_model,
+                        MAX(p.applied_at)           AS last_seen
+                    FROM power_limit_events p
+                    INNER JOIN (
+                        SELECT node_name, MAX(applied_at) AS max_at
+                        FROM   power_limit_events
+                        GROUP  BY node_name
+                    ) latest ON p.node_name = latest.node_name
+                           AND p.applied_at >= latest.max_at - INTERVAL '10 minutes'
+                    GROUP BY p.node_name
+                )
+                SELECT
+                    nr.node_name,
+                    COALESCE(a.gpu_model, nr.gpu_model)  AS gpu_model,
+                    a.actual_gpu_count,
+                    i.expected_gpu_count,
+                    i.expected_gpu_model,
+                    i.netbox_device_id,
+                    i.last_synced                        AS inventory_synced_at,
+                    COALESCE(a.last_seen, nr.last_seen)  AS last_seen,
+                    CASE
+                        WHEN i.expected_gpu_count IS NULL OR a.actual_gpu_count IS NULL THEN 'unknown'
+                        WHEN a.actual_gpu_count < i.expected_gpu_count                 THEN 'missing'
+                        ELSE 'ok'
+                    END AS gpu_status
+                FROM node_registry nr
+                LEFT JOIN actual_gpu_counts a ON a.node_name = nr.node_name
+                LEFT JOIN node_inventory    i ON i.node_name = nr.node_name
+                ORDER BY
+                    CASE
+                        WHEN i.expected_gpu_count IS NULL OR a.actual_gpu_count IS NULL THEN 2
+                        WHEN a.actual_gpu_count < i.expected_gpu_count                 THEN 0
+                        ELSE 1
+                    END,
+                    nr.node_name
+            """)
+            rows = cur.fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
 @app.get("/")
 def index():
     return render_template("index.html")
+
+
+@app.get("/inventory")
+def inventory():
+    return render_template("inventory.html")
 
 
 # ── Retention cleanup ─────────────────────────────────────────────────────────

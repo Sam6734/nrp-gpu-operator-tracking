@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GPU Inventory — NRP Nautilus</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #090d14;
+      --surface:   #0e1520;
+      --surface2:  #141c2b;
+      --border:    #1e2d45;
+      --border2:   #253650;
+      --text:      #cdd9e5;
+      --muted:     #5c7394;
+      --accent:    #388bfd;
+      --green:     #3fb950;
+      --yellow:    #d29922;
+      --orange:    #e3722a;
+      --red:       #f85149;
+      --glow-blue: rgba(56,139,253,.15);
+      --glow-red:  rgba(248,81,73,.15);
+      --glow-grn:  rgba(63,185,80,.12);
+    }
+
+    body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; font-size: 14px; line-height: 1.5; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: var(--surface); }
+    ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: .9rem 1.5rem;
+      display: flex; align-items: center; justify-content: space-between;
+      position: sticky; top: 0; z-index: 100;
+    }
+    .brand { display: flex; align-items: center; gap: .6rem; font-size: 1rem; font-weight: 700; color: #fff; }
+    .brand-icon { width: 28px; height: 28px; background: linear-gradient(135deg, #388bfd, #39c5cf); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 14px; }
+    .brand-sub { font-size: .7rem; font-weight: 400; color: var(--muted); display: block; }
+    .nav-links { display: flex; gap: .5rem; }
+    .nav-link { background: transparent; border: 1px solid var(--border2); color: var(--muted); padding: .3rem .75rem; border-radius: 6px; font-size: .75rem; cursor: pointer; text-decoration: none; transition: all .2s; }
+    .nav-link:hover, .nav-link.active { border-color: var(--accent); color: var(--accent); }
+    .header-right { display: flex; align-items: center; gap: 1rem; }
+    #last-updated { font-size: .72rem; color: var(--muted); }
+    .pulse-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 0 rgba(63,185,80,.6); animation: pulse 2.5s infinite; display: inline-block; margin-right: .35rem; }
+    @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(63,185,80,.6); } 70% { box-shadow: 0 0 0 6px rgba(63,185,80,0); } 100% { box-shadow: 0 0 0 0 rgba(63,185,80,0); } }
+    .btn-refresh { background: transparent; border: 1px solid var(--border2); color: var(--muted); padding: .3rem .75rem; border-radius: 6px; font-size: .75rem; cursor: pointer; transition: all .2s; }
+    .btn-refresh:hover { border-color: var(--accent); color: var(--accent); }
+
+    .container { max-width: 1400px; margin: 0 auto; padding: 1.5rem; }
+
+    .stats-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1rem; margin-bottom: 1.5rem; }
+    @media (max-width: 900px) { .stats-grid { grid-template-columns: repeat(3, 1fr); } }
+
+    .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1.2rem 1.4rem; position: relative; overflow: hidden; transition: border-color .2s; }
+    .stat-card::before { content: ''; position: absolute; inset: 0; border-radius: inherit; opacity: 0; transition: opacity .3s; }
+    .stat-card:hover::before { opacity: 1; }
+    .stat-card.c-blue::before  { background: var(--glow-blue); }
+    .stat-card.c-red::before   { background: var(--glow-red); }
+    .stat-card.c-green::before { background: var(--glow-grn); }
+    .stat-card.c-yellow::before{ background: rgba(210,153,34,.1); }
+    .stat-card.c-muted::before { background: rgba(92,115,148,.08); }
+    .stat-label { font-size: .72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: .5rem; }
+    .stat-num { font-size: 2.4rem; font-weight: 800; line-height: 1; }
+    .stat-num.blue   { color: var(--accent); }
+    .stat-num.red    { color: var(--red); }
+    .stat-num.green  { color: var(--green); }
+    .stat-num.yellow { color: var(--yellow); }
+    .stat-num.muted  { color: var(--muted); }
+    .stat-icon { position: absolute; right: 1.2rem; top: 50%; transform: translateY(-50%); font-size: 2rem; opacity: .08; }
+
+    .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin-bottom: 1.5rem; }
+    .panel-header { background: var(--surface2); border-bottom: 1px solid var(--border); padding: .75rem 1.2rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+    .panel-title { font-size: .82rem; font-weight: 600; color: #fff; text-transform: uppercase; letter-spacing: .07em; display: flex; align-items: center; gap: .5rem; }
+    .panel-title .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+    .panel-title .dot.red   { background: var(--red); }
+    .panel-title .dot.green { background: var(--green); }
+
+    .filter-input { background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: .3rem .7rem; border-radius: 6px; font-size: .78rem; outline: none; transition: border-color .2s; width: 180px; }
+    .filter-input:focus { border-color: var(--accent); }
+
+    .tbl-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    thead th { padding: .55rem 1rem; font-size: .7rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; border-bottom: 1px solid var(--border); white-space: nowrap; background: var(--surface2); }
+    tbody tr { border-bottom: 1px solid var(--border); transition: background .15s; }
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: var(--surface2); }
+    tbody td { padding: .55rem 1rem; font-size: .82rem; vertical-align: middle; white-space: nowrap; }
+    code { background: rgba(56,139,253,.1); color: var(--accent); padding: .1em .45em; border-radius: 4px; font-size: .78rem; font-family: 'Cascadia Code','Fira Code',monospace; }
+
+    .badge { display: inline-block; padding: .18em .6em; border-radius: 4px; font-size: .7rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+    .badge-ok      { background: rgba(63,185,80,.15);  color: var(--green);  border: 1px solid rgba(63,185,80,.3); }
+    .badge-missing { background: rgba(248,81,73,.15);  color: var(--red);    border: 1px solid rgba(248,81,73,.3); }
+    .badge-unknown { background: rgba(92,115,148,.12); color: var(--muted);  border: 1px solid rgba(92,115,148,.25); }
+
+    .gpu-count-ok      { color: var(--green); font-weight: 600; font-size: .9rem; }
+    .gpu-count-missing { color: var(--red);   font-weight: 700; font-size: .9rem; }
+    .gpu-count-unknown { color: var(--muted); font-size: .9rem; }
+
+    .missing-pill { display: inline-block; background: rgba(248,81,73,.18); color: var(--red); border: 1px solid rgba(248,81,73,.35); border-radius: 4px; padding: .1em .5em; font-size: .72rem; font-weight: 700; margin-left: .4rem; }
+
+    .row-missing { background: rgba(248,81,73,.04) !important; }
+    .row-missing:hover { background: rgba(248,81,73,.08) !important; }
+
+    .empty { padding: 2.5rem; text-align: center; color: var(--muted); font-size: .82rem; }
+
+    .section-divider { padding: .4rem 1rem; background: rgba(255,255,255,.02); border-bottom: 1px solid var(--border); font-size: .7rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="brand-icon">⚡</div>
+    <div>
+      GPU Inventory
+      <span class="brand-sub">NRP Nautilus · RTX Fleet</span>
+    </div>
+  </div>
+  <div class="header-right">
+    <nav class="nav-links">
+      <a href="/"         class="nav-link">Power Dashboard</a>
+      <a href="/inventory" class="nav-link active">GPU Inventory</a>
+    </nav>
+    <span id="last-updated"></span>
+    <button class="btn-refresh" onclick="load()">↻ Refresh</button>
+  </div>
+</header>
+
+<div class="container">
+
+  <div class="stats-grid">
+    <div class="stat-card c-blue">
+      <div class="stat-label">Total GPU Nodes</div>
+      <div class="stat-num blue" id="stat-total">—</div>
+      <div class="stat-icon">🖥</div>
+    </div>
+    <div class="stat-card c-green">
+      <div class="stat-label">GPUs Full Count</div>
+      <div class="stat-num green" id="stat-ok">—</div>
+      <div class="stat-icon">✓</div>
+    </div>
+    <div class="stat-card c-red">
+      <div class="stat-label">GPUs Missing</div>
+      <div class="stat-num red" id="stat-missing">—</div>
+      <div class="stat-icon">⚠</div>
+    </div>
+    <div class="stat-card c-muted">
+      <div class="stat-label">No Data Yet</div>
+      <div class="stat-num muted" id="stat-unknown">—</div>
+      <div class="stat-icon">?</div>
+    </div>
+    <div class="stat-card c-yellow">
+      <div class="stat-label">Total GPUs (act/exp)</div>
+      <div class="stat-num yellow" id="stat-totals" style="font-size:1.6rem">—</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <div class="panel-title"><span class="dot red"></span>GPU Node Inventory</div>
+      <div style="display:flex;gap:.5rem;align-items:center;">
+        <select class="filter-input" id="status-filter" onchange="renderTable()" style="width:140px;">
+          <option value="">All nodes</option>
+          <option value="missing">Missing GPUs</option>
+          <option value="ok">Full count</option>
+          <option value="unknown">No data</option>
+        </select>
+        <input class="filter-input" id="node-filter" placeholder="Filter nodes…" oninput="renderTable()">
+      </div>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th>Node</th>
+          <th>GPU Model</th>
+          <th>Actual</th>
+          <th>Expected</th>
+          <th>Missing</th>
+          <th>Status</th>
+          <th>Last Seen</th>
+          <th>Inv. Synced</th>
+        </tr></thead>
+        <tbody id="inv-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<script>
+let _allRows = [];
+
+function fmtTime(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  const age = Date.now() - d.getTime();
+  if (age < 60000)    return 'just now';
+  if (age < 3600000)  return Math.floor(age / 60000) + 'm ago';
+  if (age < 86400000) return Math.floor(age / 3600000) + 'h ago';
+  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+}
+
+function renderTable() {
+  const statusFilter = document.getElementById('status-filter').value;
+  const nodeFilter   = document.getElementById('node-filter').value.toLowerCase();
+
+  let rows = _allRows;
+  if (statusFilter) rows = rows.filter(r => r.gpu_status === statusFilter);
+  if (nodeFilter)   rows = rows.filter(r => r.node_name.toLowerCase().includes(nodeFilter));
+
+  const tbody = document.getElementById('inv-tbody');
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="8"><div class="empty">No nodes match.</div></td></tr>`;
+    return;
+  }
+
+  let html = '';
+  let lastStatus = null;
+  for (const r of rows) {
+    if (r.gpu_status !== lastStatus) {
+      const labels = { missing: '⚠ Missing GPUs', ok: '✓ Full Count', unknown: '? No Data Yet' };
+      if (!statusFilter) {
+        html += `<tr><td colspan="8" class="section-divider">${labels[r.gpu_status] || r.gpu_status}</td></tr>`;
+      }
+      lastStatus = r.gpu_status;
+    }
+
+    const actual   = r.actual_gpu_count   != null ? r.actual_gpu_count   : '?';
+    const expected = r.expected_gpu_count != null ? r.expected_gpu_count : '?';
+    const missing  = (r.actual_gpu_count != null && r.expected_gpu_count != null)
+                     ? Math.max(0, r.expected_gpu_count - r.actual_gpu_count) : null;
+
+    const statusBadge =
+      r.gpu_status === 'ok'      ? '<span class="badge badge-ok">OK</span>' :
+      r.gpu_status === 'missing' ? '<span class="badge badge-missing">Missing</span>' :
+                                   '<span class="badge badge-unknown">Unknown</span>';
+
+    const actualCls =
+      r.gpu_status === 'ok'      ? 'gpu-count-ok' :
+      r.gpu_status === 'missing' ? 'gpu-count-missing' : 'gpu-count-unknown';
+
+    const missingCell = missing > 0
+      ? `<span class="missing-pill">−${missing}</span>`
+      : missing === 0 ? '<span style="color:var(--muted)">—</span>'
+      : '<span style="color:var(--muted)">—</span>';
+
+    const rowCls = r.gpu_status === 'missing' ? 'row-missing' : '';
+
+    html += `<tr class="${rowCls}">
+      <td><code>${r.node_name}</code></td>
+      <td style="color:var(--muted)">${r.gpu_model || '—'}</td>
+      <td><span class="${actualCls}">${actual}</span></td>
+      <td style="color:var(--text)">${expected}</td>
+      <td>${missingCell}</td>
+      <td>${statusBadge}</td>
+      <td>${fmtTime(r.last_seen)}</td>
+      <td style="color:var(--muted)">${fmtTime(r.inventory_synced_at)}</td>
+    </tr>`;
+  }
+  tbody.innerHTML = html;
+}
+
+async function load() {
+  try {
+    const res  = await fetch('/api/gpu-inventory');
+    _allRows   = await res.json();
+
+    const total   = _allRows.length;
+    const ok      = _allRows.filter(r => r.gpu_status === 'ok').length;
+    const missing = _allRows.filter(r => r.gpu_status === 'missing').length;
+    const unknown = _allRows.filter(r => r.gpu_status === 'unknown').length;
+
+    const totalActual   = _allRows.reduce((s, r) => s + (r.actual_gpu_count   || 0), 0);
+    const totalExpected = _allRows.reduce((s, r) => s + (r.expected_gpu_count || 0), 0);
+
+    document.getElementById('stat-total').textContent   = total;
+    document.getElementById('stat-ok').textContent      = ok;
+    document.getElementById('stat-missing').textContent = missing;
+    document.getElementById('stat-unknown').textContent = unknown;
+    document.getElementById('stat-totals').textContent  = `${totalActual}/${totalExpected}`;
+
+    renderTable();
+
+    const ts = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+    document.getElementById('last-updated').innerHTML =
+      `<span class="pulse-dot"></span>Updated ${ts}`;
+  } catch(e) {
+    console.error('Failed to load inventory:', e);
+  }
+}
+
+load();
+setInterval(load, 30000);
+</script>
+</body>
+</html>
