@@ -337,6 +337,7 @@
         <thead><tr>
           <th>Node</th>
           <th>GPU Model</th>
+          <th>GPUs</th>
           <th>Reboots (24h)</th>
           <th>Total Reboots</th>
           <th>Last Reboot</th>
@@ -495,6 +496,21 @@ function renderStats(nodes, events) {
   document.getElementById('stat-power-events').textContent = powerEvents;
 }
 
+function gpuCountCell(actual, expected) {
+  if (actual == null && expected == null) return '<span style="color:var(--muted)">—</span>';
+  const a = actual   != null ? actual   : '?';
+  const e = expected != null ? expected : '?';
+  if (expected != null && actual != null && actual < expected) {
+    return `<span style="color:var(--red);font-weight:600" title="${a} detected / ${e} expected in NetBox">⚠ ${a}/${e}</span>`;
+  }
+  if (expected != null && actual != null && actual === expected) {
+    return `<span style="color:var(--green)" title="${a} detected / ${e} expected in NetBox">${a}/${e}</span>`;
+  }
+  // one side unknown
+  const display = expected != null ? `${a}/${e}` : `${a}`;
+  return `<span style="color:var(--muted)" title="detected/expected">${display}</span>`;
+}
+
 function renderNodes(nodes) {
   const tbody = document.getElementById('node-tbody');
   if (!nodes.length) { tbody.innerHTML = empty('No nodes tracked yet.'); return; }
@@ -502,6 +518,7 @@ function renderNodes(nodes) {
     <tr>
       <td><code>${n.node_name}</code></td>
       <td>${n.gpu_model || '—'}</td>
+      <td>${gpuCountCell(n.actual_gpu_count, n.expected_gpu_count)}</td>
       <td>${n.reboots_24h || 0}</td>
       <td>${n.total_reboots || 0}</td>
       <td>${fmtTime(n.last_reboot)}</td>
