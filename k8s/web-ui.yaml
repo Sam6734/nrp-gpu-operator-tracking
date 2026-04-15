@@ -9,6 +9,10 @@ data:
   DB_PORT: "5432"
   DB_NAME: "gputrack"
   DB_USER: "gputrack"
+  REBOOT_EVENTS_RETENTION_DAYS:   "90"
+  POWER_EVENTS_RETENTION_DAYS:    "30"
+  OPERATOR_EVENTS_RETENTION_DAYS: "90"
+  CLEANUP_INTERVAL_SEC:           "86400"
 ---
 # ── Deployment ────────────────────────────────────────────────────────────────
 apiVersion: apps/v1

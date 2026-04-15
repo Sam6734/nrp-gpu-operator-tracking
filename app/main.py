@@ -873,6 +873,47 @@ def _format_auto_delete_blocked(node_name: str, stuck_count: int, cr_name: str, 
     )
 
 # -------------------- GPU Power Management --------------------
+def _netbox_get_gpu_inventory(device_id: int, logger=None) -> Dict[str, Any]:
+    """Query NetBox inventory items for a device and return GPU count + model.
+    Filters by NVIDIA manufacturer or common GPU name keywords."""
+    resp = None
+    try:
+        resp = _NB.get(
+            f"{NB_URL}/api/dcim/inventory-items/",
+            params={"device_id": device_id, "limit": 200},
+            timeout=NETBOX_TIMEOUT_SEC,
+        )
+        resp.raise_for_status()
+        items = resp.json().get("results", [])
+
+        gpu_names = []
+        for item in items:
+            name = (item.get("name") or "").lower()
+            mfr  = ""
+            if item.get("manufacturer"):
+                m = item["manufacturer"]
+                mfr = (m.get("name") or m.get("display") or "").lower()
+
+            is_gpu = "nvidia" in mfr or any(kw in name for kw in [
+                "geforce", "rtx", "gtx", "quadro", "tesla",
+                "a100", "h100", "ga10", "ad10", "tu10", "gp10",
+            ])
+            if is_gpu:
+                gpu_names.append(item.get("name") or "")
+
+        model = ""
+        if gpu_names:
+            from collections import Counter
+            model = Counter(gpu_names).most_common(1)[0][0]
+
+        return {"count": len(gpu_names), "model": model}
+
+    except Exception as e:
+        if logger:
+            logger.warning(f"NetBox GPU inventory fetch failed for device_id={device_id}: {e}; response={_resp_text(resp)}")
+        return {}
+
+
 def _count_reboots_24h_netbox(device_id: int, logger=None) -> int:
     """Count TAG_REBOOT_CONFIRMED journal entries in the last 24 h for this device."""
     entries = _netbox_get_recent_journal(device_id, lookback_hours=24, logger=logger)
@@ -1209,6 +1250,44 @@ def on_snr_event(event, body, name, namespace, logger, **_):
         return
     _handle_one_snr(body, name, namespace, logger)
 
+# -------------------- NetBox inventory sync --------------------
+def _sync_netbox_inventory_to_webui(logger) -> None:
+    """One-time startup task: for every GPU node in the cluster, query NetBox
+    inventory to get expected GPU count and POST it to the web UI for display."""
+    try:
+        v1 = k8s.CoreV1Api()
+        nodes = v1.list_node(label_selector="nvidia.com/gpu.present=true").items
+        logger.info(f"NetBox inventory sync: {len(nodes)} GPU nodes found")
+    except Exception as e:
+        logger.warning(f"NetBox inventory sync: failed to list nodes: {e}")
+        return
+
+    synced = 0
+    for node in nodes:
+        node_name = node.metadata.name
+        try:
+            device_id = _device_id_from_nodename(node_name, logger)
+            if not device_id:
+                continue
+            inv = _netbox_get_gpu_inventory(device_id, logger)
+            if not inv or not inv.get("count"):
+                continue
+            _post_to_webui(
+                f"{WEB_UI_URL}/api/nodes/sync-netbox",
+                {
+                    "node_name":           node_name,
+                    "netbox_device_id":    device_id,
+                    "expected_gpu_count":  inv["count"],
+                    "expected_gpu_model":  inv["model"],
+                },
+            )
+            synced += 1
+        except Exception as e:
+            logger.warning(f"NetBox inventory sync: failed for {node_name}: {e}")
+
+    logger.info(f"NetBox inventory sync complete: {synced}/{len(nodes)} nodes synced to web UI")
+
+
 # -------------------- Kopf handlers --------------------
 @kopf.on.startup()
 def _startup(settings: kopf.OperatorSettings, logger, **_):
@@ -1237,6 +1316,14 @@ def _startup(settings: kopf.OperatorSettings, logger, **_):
             )
             t.start()
             _SWEEP_THREAD_STARTED = True
+
+    if WEB_UI_URL:
+        threading.Thread(
+            target=_sync_netbox_inventory_to_webui,
+            args=(logger,),
+            name="netbox-inventory-sync",
+            daemon=True,
+        ).start()
 
     logger.info(
         f"Configuration: SNR_NAMESPACE={SNR_NAMESPACE}, NB_OBJECT_TYPE={NB_OBJECT_TYPE}, "
