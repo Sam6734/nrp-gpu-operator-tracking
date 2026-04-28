@@ -1288,6 +1288,41 @@ def _sync_netbox_inventory_to_webui(logger) -> None:
     logger.info(f"NetBox inventory sync complete: {synced}/{len(nodes)} nodes synced to web UI")
 
 
+# -------------------- K8s GPU count sync --------------------
+def _sync_k8s_gpu_counts(logger) -> None:
+    """Read nvidia.com/gpu allocatable count for every GPU node and POST to web UI."""
+    try:
+        v1 = k8s.CoreV1Api()
+        nodes = v1.list_node(label_selector="nvidia.com/gpu.present=true").items
+    except Exception as e:
+        logger and logger.warning(f"k8s GPU count sync: failed to list nodes: {e}")
+        return
+
+    payload = []
+    for node in nodes:
+        node_name = node.metadata.name
+        try:
+            allocatable = (node.status.allocatable or {})
+            k8s_count = int(allocatable.get("nvidia.com/gpu", "0") or "0")
+        except Exception:
+            k8s_count = 0
+        payload.append({"node_name": node_name, "k8s_gpu_count": k8s_count})
+
+    if payload and WEB_UI_URL:
+        _post_to_webui(f"{WEB_UI_URL}/api/nodes/k8s-counts", {"nodes": payload})
+        logger and logger.info(f"k8s GPU count sync: updated {len(payload)} nodes")
+
+
+def _sync_k8s_gpu_counts_loop(logger) -> None:
+    """Daemon: sync k8s GPU allocatable counts every 10 minutes."""
+    while True:
+        try:
+            _sync_k8s_gpu_counts(logger)
+        except Exception as e:
+            logger and logger.warning(f"k8s GPU count sync loop error: {e}")
+        time.sleep(600)
+
+
 # -------------------- Kopf handlers --------------------
 @kopf.on.startup()
 def _startup(settings: kopf.OperatorSettings, logger, **_):
@@ -1322,6 +1357,12 @@ def _startup(settings: kopf.OperatorSettings, logger, **_):
             target=_sync_netbox_inventory_to_webui,
             args=(logger,),
             name="netbox-inventory-sync",
+            daemon=True,
+        ).start()
+        threading.Thread(
+            target=_sync_k8s_gpu_counts_loop,
+            args=(logger,),
+            name="k8s-gpu-count-sync",
             daemon=True,
         ).start()
 

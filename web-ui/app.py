@@ -100,6 +100,11 @@ def init_db():
                 CREATE INDEX IF NOT EXISTS idx_pl_node ON power_limit_events(node_name);
                 CREATE INDEX IF NOT EXISTS idx_pl_ts   ON power_limit_events(applied_at DESC);
             """)
+            # Live migration: add k8s_allocatable_gpu_count if not yet present
+            cur.execute("""
+                ALTER TABLE node_registry
+                    ADD COLUMN IF NOT EXISTS k8s_allocatable_gpu_count INTEGER;
+            """)
         conn.commit()
     log.info("Database schema initialised.")
     # Start retention cleanup thread (runs once immediately then every 24 h)
@@ -205,6 +210,33 @@ def api_sync_netbox():
     return jsonify({"ok": True}), 201
 
 
+@app.post("/api/nodes/k8s-counts")
+def api_update_k8s_counts():
+    """Batch-update k8s allocatable GPU counts. Called by operator every 10 min."""
+    data = request.get_json(silent=True) or {}
+    nodes = data.get("nodes", [])
+    if not nodes:
+        abort(400, "nodes list required")
+    updated = 0
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            for entry in nodes:
+                node_name = (entry.get("node_name") or "").strip()
+                k8s_count = entry.get("k8s_gpu_count")
+                if not node_name:
+                    continue
+                cur.execute("""
+                    INSERT INTO node_registry (node_name, first_seen, last_seen, k8s_allocatable_gpu_count)
+                    VALUES (%s, NOW(), NOW(), %s)
+                    ON CONFLICT (node_name) DO UPDATE SET
+                        k8s_allocatable_gpu_count = EXCLUDED.k8s_allocatable_gpu_count,
+                        last_seen = NOW()
+                """, (node_name, k8s_count))
+                updated += 1
+        conn.commit()
+    return jsonify({"ok": True, "updated": updated})
+
+
 # ── JSON API (used by dashboard JS) ──────────────────────────────────────────
 
 @app.get("/api/nodes")
@@ -259,6 +291,7 @@ def api_nodes():
                     p.current_pct,
                     p.power_updated_at,
                     a.actual_gpu_count,
+                    nr.k8s_allocatable_gpu_count,
                     i.expected_gpu_count,
                     i.expected_gpu_model,
                     i.last_synced       AS inventory_synced_at,
@@ -371,46 +404,31 @@ def healthz():
 
 @app.get("/api/gpu-inventory")
 def api_gpu_inventory():
-    """Fleet-wide GPU inventory: actual vs expected counts for all nodes."""
+    """Fleet-wide GPU inventory: k8s allocatable vs expected GPU counts for all nodes.
+    k8s_allocatable_gpu_count is the authoritative actual count (from device plugin)."""
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                WITH actual_gpu_counts AS (
-                    SELECT
-                        p.node_name,
-                        COUNT(DISTINCT p.gpu_index) AS actual_gpu_count,
-                        MAX(p.gpu_model)            AS gpu_model,
-                        MAX(p.applied_at)           AS last_seen
-                    FROM power_limit_events p
-                    INNER JOIN (
-                        SELECT node_name, MAX(applied_at) AS max_at
-                        FROM   power_limit_events
-                        GROUP  BY node_name
-                    ) latest ON p.node_name = latest.node_name
-                           AND p.applied_at >= latest.max_at - INTERVAL '10 minutes'
-                    GROUP BY p.node_name
-                )
                 SELECT
                     nr.node_name,
-                    COALESCE(a.gpu_model, nr.gpu_model)  AS gpu_model,
-                    a.actual_gpu_count,
+                    nr.gpu_model,
+                    nr.k8s_allocatable_gpu_count,
                     i.expected_gpu_count,
                     i.expected_gpu_model,
                     i.netbox_device_id,
-                    i.last_synced                        AS inventory_synced_at,
-                    COALESCE(a.last_seen, nr.last_seen)  AS last_seen,
+                    i.last_synced   AS inventory_synced_at,
+                    nr.last_seen,
                     CASE
-                        WHEN i.expected_gpu_count IS NULL OR a.actual_gpu_count IS NULL THEN 'unknown'
-                        WHEN a.actual_gpu_count < i.expected_gpu_count                 THEN 'missing'
+                        WHEN i.expected_gpu_count IS NULL OR nr.k8s_allocatable_gpu_count IS NULL THEN 'unknown'
+                        WHEN nr.k8s_allocatable_gpu_count < i.expected_gpu_count                  THEN 'missing'
                         ELSE 'ok'
                     END AS gpu_status
                 FROM node_registry nr
-                LEFT JOIN actual_gpu_counts a ON a.node_name = nr.node_name
-                LEFT JOIN node_inventory    i ON i.node_name = nr.node_name
+                LEFT JOIN node_inventory i ON i.node_name = nr.node_name
                 ORDER BY
                     CASE
-                        WHEN i.expected_gpu_count IS NULL OR a.actual_gpu_count IS NULL THEN 2
-                        WHEN a.actual_gpu_count < i.expected_gpu_count                 THEN 0
+                        WHEN i.expected_gpu_count IS NULL OR nr.k8s_allocatable_gpu_count IS NULL THEN 2
+                        WHEN nr.k8s_allocatable_gpu_count < i.expected_gpu_count                  THEN 0
                         ELSE 1
                     END,
                     nr.node_name

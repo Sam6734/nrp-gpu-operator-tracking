@@ -177,8 +177,8 @@
         <thead><tr>
           <th>Node</th>
           <th>GPU Model</th>
-          <th>Actual</th>
-          <th>Expected</th>
+          <th title="GPUs healthy per k8s device plugin">K8s</th>
+          <th title="GPUs expected per NetBox inventory">Expected</th>
           <th>Missing</th>
           <th>Status</th>
           <th>Last Seen</th>
@@ -229,10 +229,10 @@ function renderTable() {
       lastStatus = r.gpu_status;
     }
 
-    const actual   = r.actual_gpu_count   != null ? r.actual_gpu_count   : '?';
+    const actual   = r.k8s_allocatable_gpu_count   != null ? r.k8s_allocatable_gpu_count   : '?';
     const expected = r.expected_gpu_count != null ? r.expected_gpu_count : '?';
-    const missing  = (r.actual_gpu_count != null && r.expected_gpu_count != null)
-                     ? Math.max(0, r.expected_gpu_count - r.actual_gpu_count) : null;
+    const missing  = (r.k8s_allocatable_gpu_count != null && r.expected_gpu_count != null)
+                     ? Math.max(0, r.expected_gpu_count - r.k8s_allocatable_gpu_count) : null;
 
     const statusBadge =
       r.gpu_status === 'ok'      ? '<span class="badge badge-ok">OK</span>' :
@@ -274,7 +274,7 @@ async function load() {
     const missing = _allRows.filter(r => r.gpu_status === 'missing').length;
     const unknown = _allRows.filter(r => r.gpu_status === 'unknown').length;
 
-    const totalActual   = _allRows.reduce((s, r) => s + (r.actual_gpu_count   || 0), 0);
+    const totalActual   = _allRows.reduce((s, r) => s + (r.k8s_allocatable_gpu_count   || 0), 0);
     const totalExpected = _allRows.reduce((s, r) => s + (r.expected_gpu_count || 0), 0);
 
     document.getElementById('stat-total').textContent   = total;

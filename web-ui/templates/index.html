@@ -502,10 +502,10 @@ function gpuCountCell(actual, expected) {
   const a = actual   != null ? actual   : '?';
   const e = expected != null ? expected : '?';
   if (expected != null && actual != null && actual < expected) {
-    return `<span style="color:var(--red);font-weight:600" title="${a} detected / ${e} expected in NetBox">⚠ ${a}/${e}</span>`;
+    return `<span style="color:var(--red);font-weight:600" title="${a} healthy (k8s) / ${e} expected (NetBox)">⚠ ${a}/${e}</span>`;
   }
   if (expected != null && actual != null && actual === expected) {
-    return `<span style="color:var(--green)" title="${a} detected / ${e} expected in NetBox">${a}/${e}</span>`;
+    return `<span style="color:var(--green)" title="${a} healthy (k8s) / ${e} expected (NetBox)">${a}/${e}</span>`;
   }
   // one side unknown
   const display = expected != null ? `${a}/${e}` : `${a}`;
@@ -519,7 +519,7 @@ function renderNodes(nodes) {
     <tr>
       <td><code>${n.node_name}</code></td>
       <td>${n.gpu_model || '—'}</td>
-      <td>${gpuCountCell(n.actual_gpu_count, n.expected_gpu_count)}</td>
+      <td>${gpuCountCell(n.k8s_allocatable_gpu_count ?? n.actual_gpu_count, n.expected_gpu_count)}</td>
       <td>${n.reboots_24h || 0}</td>
       <td>${n.total_reboots || 0}</td>
       <td>${fmtTime(n.last_reboot)}</td>
